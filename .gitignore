@@ -1,3 +1,18 @@
 .worktrees/
 .private-journal/
 .claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug logs
+firebase-debug.log
+*.log
+
+# Node
+node_modules/
+
+# Editor
+.vscode/
+.idea/

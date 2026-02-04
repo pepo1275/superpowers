@@ -1,0 +1,169 @@
+name: CI - Validate Skills & Plugin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-skills:
+    name: Validate Skills Structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate all SKILL.md files have valid frontmatter
+        run: |
+          echo "=== Validating skill frontmatter ==="
+          errors=0
+
+          for skill_dir in skills/*/; do
+            skill_name=$(basename "$skill_dir")
+            skill_file="${skill_dir}SKILL.md"
+
+            if [ ! -f "$skill_file" ]; then
+              echo "MISSING: $skill_file"
+              errors=$((errors + 1))
+              continue
+            fi
+
+            frontmatter_count=$(grep -c '^---$' "$skill_file" || echo "0")
+            if [ "$frontmatter_count" -lt 2 ]; then
+              echo "INVALID FRONTMATTER: $skill_file (missing --- delimiters)"
+              errors=$((errors + 1))
+              continue
+            fi
+
+            has_name=$(sed -n '/^---$/,/^---$/p' "$skill_file" | grep -c '^name:' || echo "0")
+            has_desc=$(sed -n '/^---$/,/^---$/p' "$skill_file" | grep -c '^description:' || echo "0")
+
+            if [ "$has_name" -eq 0 ]; then
+              echo "MISSING name: in $skill_file"
+              errors=$((errors + 1))
+            fi
+
+            if [ "$has_desc" -eq 0 ]; then
+              echo "MISSING description: in $skill_file"
+              errors=$((errors + 1))
+            fi
+
+            if [ "$has_name" -gt 0 ] && [ "$has_desc" -gt 0 ]; then
+              echo "OK $skill_name"
+            fi
+          done
+
+          echo ""
+          echo "=== Results ==="
+          total=$(ls -d skills/*/ 2>/dev/null | wc -l | tr -d ' ')
+          echo "Total skills: $total"
+          echo "Errors: $errors"
+
+          if [ "$errors" -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Validate skills-core.js can parse all skills
+        run: |
+          echo "=== Testing skills-core.js parsing ==="
+          node --input-type=module <<'SCRIPT'
+          import { extractFrontmatter, findSkillsInDir, stripFrontmatter } from './lib/skills-core.js';
+          import fs from 'fs';
+
+          const skillsDir = './skills';
+          const skills = findSkillsInDir(skillsDir, 'superpowers');
+          let errors = 0;
+
+          for (const skill of skills) {
+            const { name, description } = extractFrontmatter(skill.skillFile);
+            if (!name) { console.error('ERROR ' + skill.skillFile + ': empty name'); errors++; }
+            if (!description) { console.error('ERROR ' + skill.skillFile + ': empty description'); errors++; }
+            const content = fs.readFileSync(skill.skillFile, 'utf8');
+            const stripped = stripFrontmatter(content);
+            if (stripped.length < 50) { console.error('ERROR ' + skill.skillFile + ': content too short'); errors++; }
+            if (!errors) { console.log('OK ' + name); }
+          }
+
+          console.log('\nParsed ' + skills.length + ' skills, ' + errors + ' errors');
+          if (errors > 0) process.exit(1);
+          SCRIPT
+
+  validate-plugin:
+    name: Validate Plugin Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate plugin.json
+        run: |
+          echo "=== Validating plugin.json ==="
+          node <<'SCRIPT'
+          const fs = require('fs');
+          const pluginJson = JSON.parse(fs.readFileSync('.claude-plugin/plugin.json', 'utf8'));
+          const required = ['name', 'description', 'version', 'license'];
+          let errors = 0;
+          for (const field of required) {
+            if (!pluginJson[field]) { console.error('Missing: ' + field); errors++; }
+            else { console.log('OK ' + field + ': ' + pluginJson[field]); }
+          }
+          const semverRegex = /^\d+\.\d+\.\d+$/;
+          if (!semverRegex.test(pluginJson.version)) {
+            console.error('Invalid version: ' + pluginJson.version);
+            errors++;
+          }
+          if (errors > 0) process.exit(1);
+          console.log('\nPlugin config valid');
+          SCRIPT
+
+      - name: Validate hooks.json
+        run: |
+          echo "=== Validating hooks.json ==="
+          node <<'SCRIPT'
+          const fs = require('fs');
+          const hooksJson = JSON.parse(fs.readFileSync('hooks/hooks.json', 'utf8'));
+          if (!hooksJson.hooks) { console.error('Missing hooks key'); process.exit(1); }
+          const validEvents = ['SessionStart','PreToolUse','PostToolUse','Stop','SubagentStop','SessionEnd','UserPromptSubmit','PreCompact','Notification'];
+          let errors = 0;
+          for (const [event, handlers] of Object.entries(hooksJson.hooks)) {
+            if (!validEvents.includes(event)) { console.error('Unknown event: ' + event); errors++; }
+            else { console.log('OK ' + event + ' (' + handlers.length + ' handlers)'); }
+            for (const handler of handlers) {
+              for (const hook of handler.hooks || []) {
+                if (hook.command) {
+                  const scriptPath = hook.command.replace('${CLAUDE_PLUGIN_ROOT}', '.');
+                  if (!fs.existsSync(scriptPath)) { console.error('Script not found: ' + scriptPath); errors++; }
+                }
+              }
+            }
+          }
+          if (errors > 0) process.exit(1);
+          console.log('\nHooks config valid');
+          SCRIPT
+
+      - name: Validate commands exist
+        run: |
+          echo "=== Validating commands ==="
+          for cmd_file in commands/*.md; do
+            name=$(basename "$cmd_file" .md)
+            if [ ! -s "$cmd_file" ]; then echo "Empty: $cmd_file"; exit 1; fi
+            echo "OK /$name"
+          done
+
+  shellcheck:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        run: |
+          echo "=== ShellCheck Analysis ==="
+          for script in hooks/*.sh tests/claude-code/*.sh; do
+            echo "Checking: $script"
+            shellcheck -S warning "$script" || true
+          done
