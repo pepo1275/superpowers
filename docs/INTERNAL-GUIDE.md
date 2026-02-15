@@ -1,6 +1,6 @@
 # Superpowers - Guia Interna de Referencia
 
-> Documento generado el 4 de febrero de 2026.
+> Documento generado el 4 de febrero de 2026. Actualizado el 15 de febrero de 2026.
 > Recoge el analisis completo del framework, la infraestructura montada y las instrucciones operativas.
 
 ---
@@ -11,9 +11,9 @@ Superpowers es un **plugin para coding agents** (Claude Code, Codex, OpenCode) q
 
 - **Repo original**: [obra/superpowers](https://github.com/obra/superpowers) (Jesse Vincent)
 - **Nuestro fork**: [pepo1275/superpowers](https://github.com/pepo1275/superpowers)
-- **Version actual**: 4.1.1
+- **Version actual**: 4.3.0
 - **Licencia**: MIT
-- **Lenguajes**: Shell (70.5%), JavaScript (19.0%), Python (5.2%), TypeScript (3.9%)
+- **Lenguajes**: Shell (~80%), JavaScript (~10%), Python (~5%), TypeScript (~4%)
 
 ### Filosofia central
 
@@ -65,6 +65,8 @@ superpowers/
 │   ├── opencode/             # Tests de integracion OpenCode
 │   ├── skill-triggering/     # Tests de triggering automatico
 │   └── subagent-driven-dev/  # Tests de flujo SDD con proyectos reales
+├── .codex/
+│   └── INSTALL.md             # Instrucciones de instalacion para Codex (symlink a ~/.agents/skills/)
 ├── docs/                      # Documentacion por plataforma
 └── .github/
     ├── FUNDING.yml
@@ -102,6 +104,9 @@ Al iniciar cada sesion de Claude Code, el hook:
 2. Lo inyecta como contexto adicional envuelto en `<EXTREMELY_IMPORTANT>`
 3. Verifica si hay skills legacy en `~/.config/superpowers/skills` y avisa de migrar
 4. Matcher: `startup|resume|clear|compact` — se ejecuta siempre
+5. **Sincronico** (`"async": false`) — garantiza que using-superpowers este cargado antes del primer turno
+
+La funcion `escape_for_json` usa bash parameter substitution (`${s//old/new}`) para escapar JSON de forma eficiente (O(n) en vez del antiguo loop caracter por caracter que era O(n²)).
 
 ### Agente: code-reviewer
 
@@ -123,8 +128,11 @@ Un subagente con system prompt de "Senior Code Reviewer" que evalua en 5 ejes:
 
 ### Fase 1: Brainstorming
 - Dialogo socratico: una pregunta a la vez, opciones multiple choice
-- Presenta diseno en bloques de 200-300 palabras para validacion incremental
-- No se escribe codigo hasta que el diseno esta aprobado
+- Presenta diseno en secciones escaladas a su complejidad, obteniendo aprobacion
+- **HARD GATE (v4.3.0)**: No se puede invocar ningun skill de implementacion, escribir codigo ni scaffoldear hasta que el usuario apruebe el diseno
+- Checklist obligatorio de 6 pasos: explorar contexto → preguntas → proponer 2-3 enfoques → presentar diseno → escribir doc → transicion a writing-plans
+- `writing-plans` es el **unico** skill valido como siguiente paso (no frontend-design, etc.)
+- Anti-patron explicitado: "esto es demasiado simple para necesitar diseno" — todos los proyectos pasan por el proceso
 
 ### Fase 2: Git Worktrees
 - Crea workspace aislado en branch dedicado
@@ -166,7 +174,7 @@ Cleanup automatico del worktree.
 ### Skills de Proceso
 | Skill | Cuando se usa | Tamanio |
 |-------|--------------|---------|
-| brainstorming | Antes de cualquier trabajo creativo | 2,261 chars |
+| brainstorming | Antes de cualquier trabajo creativo (HARD GATE en v4.3.0) | ~4,500 chars |
 | writing-plans | Despues de brainstorm aprobado | 3,132 chars |
 | executing-plans | Para ejecutar plan en lotes de 3 | 2,400 chars |
 | subagent-driven-development | Alternativa a executing-plans con subagentes | 9,823 chars |
@@ -194,7 +202,7 @@ Cleanup automatico del worktree.
 ### Meta-Skills
 | Skill | Cuando se usa | Tamanio |
 |-------|--------------|---------|
-| using-superpowers | Auto-carga en SessionStart | 3,581 chars |
+| using-superpowers | Auto-carga en SessionStart; intercepta EnterPlanMode → brainstorming | ~3,800 chars |
 | writing-skills | Para crear nuevos skills | 22,227 chars |
 
 ---
@@ -233,12 +241,11 @@ Se ejecuta en **push a main** y en **pull requests**. Tres jobs en paralelo:
 - **Conflictos**: Si hay merge conflicts, falla y muestra comandos para resolver manualmente
 - **Seguridad**: No hace merge directo a main, siempre via PR para revision
 
-### Primer CI ejecutado
+### CI ejecutado
 
 ```
-Commit: 9907e6e
-Status: completed/success
-Duracion: 10 segundos
+Primer run:  9907e6e (CI setup)          — 10s, success
+Post-merge:  e8dcb8f (sync v4.3.0)      — 11s, success
 ```
 
 ---
@@ -292,6 +299,17 @@ claude /plugin uninstall superpowers
 3. Cuando quieras modificar: desinstalar marketplace, instalar desde fork local
 4. Desarrollar cambios en el fork
 5. Push al fork → CI valida → si OK, usar en produccion
+
+### Modo C: Codex / OpenCode (otros agentes)
+
+A partir de v4.2.0, el CLI `superpowers-codex` fue eliminado. Los agentes compatibles (Codex, OpenCode) descubren skills nativamente mediante symlink:
+
+```bash
+# Crear symlink para que el agente descubra los skills
+ln -s /Users/pepo/Dev/superpowers ~/.agents/skills/superpowers
+```
+
+Ver `.codex/INSTALL.md` para instrucciones completas.
 
 ### Desactivar por Proyecto
 
@@ -446,7 +464,8 @@ git push origin feature/mi-nuevo-skill
 | Fork clonado en `/Users/pepo/Dev/superpowers` | OK |
 | Remote `origin` → pepo1275/superpowers | OK |
 | Remote `upstream` → obra/superpowers | OK |
-| CI (validate-skills + validate-plugin + shellcheck) | OK, primer run exitoso |
+| CI (validate-skills + validate-plugin + shellcheck) | OK, pasa con v4.3.0 |
 | Sync upstream (PR automatico diario) | OK, workflow activo |
-| Plugin instalado en Claude Code | Pendiente de instalar |
-| Ultimo commit | `9907e6e` ci: add CI validation and upstream sync workflows |
+| Sincronizado con upstream | v4.3.0 (15 feb 2026) |
+| Plugin instalado en Claude Code | Pendiente de reinstalar con v4.3.0 |
+| Ultimo commit | `e8dcb8f` Merge remote-tracking branch 'upstream/main' |
